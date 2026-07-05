@@ -71,6 +71,42 @@ def prepare_objects(items):
 
         return output
 
-        def groups(items, size):
-            return [items[i:i + size] for i in range(0, len(items), size)]                
+def groups(items, size):
+    return [items[i:i + size] for i in range(0, len(items), size)]                
 
+def px(box, w, h):
+    values=[box["x"], box["y"], box["x"] +  box["w"], box["y"] + box["h"]]
+    return tuple(max(0, min(int(v * s / 100), s-1)) for v, s in zip(values, (w, h, w, h)))
+
+def fonts():
+    try:
+        return[ImageFont.truetype("arial.ttf", size) for size in (28, 18, 14)]
+    except Exception:
+        return [ImageFont.load_default()]*20
+
+def hud(img, page, scenes, object, total):
+    img = img.convert("RGBA")
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    (w, h), (title_font, label_font, small_font) = img.size, fonts()
+
+    green=(57, 255, 20, 255)
+    panel=(0, 20, 10, 185)
+    red=(255, 60, 60, 255)
+
+    draw.rectangle((20, 20, w-20, 70), fill=panel)
+    draw.text((35, 32), f"[ {scene.upper()} [{page}/{scenes}] ]", font=title_font, fill=green)
+    draw.ellipse((w-120, 28, w-104, 44), fill=green)
+    draw.text((w-96, 26), "REC", fill=green, font=label_font)
+
+    for obj in objects:
+        box = obj.get("box", {})
+        if not all(k in box for k in ("x", "y", "w", "h")):
+            continue
+
+        x1, y1, x2, y2 = px(box, w, h)
+        draw.rectangle((x1, y1, x2, y2), outline=green, width=2)
+
+        for a,b,c,d in [
+            (x1, y1, x1 + 81)
+        ]
