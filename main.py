@@ -108,5 +108,82 @@ def hud(img, page, scenes, object, total):
         draw.rectangle((x1, y1, x2, y2), outline=green, width=2)
 
         for a,b,c,d in [
-            (x1, y1, x1 + 81)
-        ]
+            (x1, y1, x1 + 18, y1), (x1, y1, x1, y1 + 18)
+            (x2, y1, x2 - 18, y1), (x2, y1, x2, y1 + 18)
+            (x1, y2, x1 + 18, y2), (x1, y2, x1, y2 - 18)
+            (x2, y2, x2 - 18, y2), (x2, y2, x2, y2 - 18)
+        ]:
+            draw.line((a, b, c, d), fill=green, width=3)
+        
+        label = obj.get("short_label", obj.get("name", "UNKNOWN")).upper()
+        metadata = obj.get("fun_metadata", "NO DATA")
+        conf = obj.get("confidence", "UNKNOWN").upper()
+        panel_y = max(80, y1 - 55)
+
+        if panel_y < 80:
+
+            panel_y = min(h - 80, y2 + 10)
+            panel_x1 = x1
+            panel_x2 = min(w - 20, x1 + 320)
+            panel_y2 = panel_y + 45
+            draw.rectangle((panel_x1, panel_y, panel_x2, panel_y2), fill=panel, outline=green, width=2)
+            draw.text((panel_x1 + 8, panel_y + 6), f"[ITEM] {label}", fill=green, font=label_font)
+            draw.text((panel_x1 + 8, panel_y + 25), f"{meta} | CONF: {conf}", fill=green, font=small_font)
+            draw.line(
+            (panel_x1 + 20, panel_y2 if panel_y < y1 else panel_y, x1 + 10, y1 + 10 if panel_y < y1 else y2 - 10),
+            fill=green,
+            width=2,
+            )
+
+            draw.rectangle((20, h - 55, w - 20, h - 20), fill=panel)
+
+draw.text(
+    (30, h - 45),
+    f"OBJECTS IN THIS SCAN: {len(objects)} | SCAN MODE: ACTIVE",
+    fill=green,
+    font=label_font,
+    )
+    return Image.alpha_composite(img, overlay).convert("RGB")
+
+def image_bytes(img):
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+file = st.file_uploader("Upload an image for analysis", type=["jpg", "jpeg", "png", "webp"])
+group_size = st.selectbox("Objects per scanner image", [3,4], index=1)
+if file:
+    original = Image.open(BytesIO(file.getvalue()))
+    st.image(original, caption="Original Image", use_container_width=True)
+
+if st.button("Analyze Image"):
+    if not config.GROQ_API_KEY:
+        st.error("Missing Groq API key. Please set the GROQ_API_KEY .env variable.")
+    elif not file:
+        st.error("Please upload an image before analyzing.")
+    else:
+        with st.spinner("Analyzing image..."):
+            try:
+                data = analyze_image(file)
+                scene = data.get("scene_title", "AI SCAN MODE")
+                object_groups = groups(prepare_objects(data.get("objects", [])), group_size)
+                Image = image.open(BytesIO(file.getvalue()))
+                st.session_state.xray_outputs = [
+                    hud(Image, scene, group, i, len(object_groups))
+                    for i, group in enumerate(object_groups, 1)
+                ]
+                st.success(f"Image analysis complete! {len(st.session_state.xray_outputs)} scanner image(s) generated.")
+            except Exception as e:
+                st.error(f"Error analyzing image: {e}")
+
+    if st.session_state.xray_outputs:
+        st.markdown("### Scanner Images")
+        for i, output in enumerate(st.session_state.xray_outputs, 1):
+            st.image(output, caption=f"Scanner Image {i}", use_container_width=True)
+
+    st.download_button(
+        f"label = Download All Scanner Images {i}",
+        image(bytes_output)
+        f="ai_scanner_image_{i}.png", "image/png",
+        key=f"download_scanner_image_{i}"
+    )
