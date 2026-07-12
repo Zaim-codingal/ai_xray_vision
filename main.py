@@ -5,12 +5,12 @@ from PIL import Image, ImageDraw, ImageFont
 from groq import Groq
 import config
 
-st.set_page_config(page_title="AI X-Ray Vision", page_icon="🔬", layout="centered")
+st.set_page_config(page_title="The AI X-Ray Vision", page_icon="🧪", layout="centered")
+
 client = Groq(api_key=config.GROQ_API_KEY)
+st.session_state.setdefault("xray_outputs", [])
 
-st_session_state.setdefault("xray_outputs", [])
-
-prompt="""Analyze this image and return ONLY valid JSON.
+PROMPT = """Analyze this image and return ONLY valid JSON.
 Identify all clearly visible important objects in the image.
 For each object, return: name, short_label, fun_metadata, confidence, box
 The "box" must use percentages 0 to 100 with x, y, w, h.
@@ -27,35 +27,49 @@ Rules:
 Format:
 {"scene_title":"short futuristic title","objects":[{"name":"person","short_label":"smiling adult","fun_metadata":"person detected near the center","confidence":"high","box":{"x":20,"y":10,"w":25,"h":60}}]}"""
 
-PERSON_WORDS=["person","adult","child","man","woman","boy","girl"]
-SAFE_LABELS=["person","adult","child","man"]
+PERSON_WORDS = {"person", "adult", "child", "woman", "man", "girl", "boy", "human", "people"}
+SAFE_LABELS = {"person", "smiling adult", "child", "seated person"}
 
-def analyze_image(image):
-    encoded=base64.b64encode(file.get_value()).decode()
+
+st.title("🧪 The AI X-Ray Vision")
+st.write("Upload a real photo and turn it into AI scanner images.")
+st.markdown(
+    "This app scans your image, finds important objects, "
+    "and creates clean scanner-style images in smaller groups."
+)
+
+
+def analyze_image(file):
+    encoded = base64.b64encode(file.getvalue()).decode()
     response = client.chat.completions.create(
-        MODEL=config.GROQ_VISION_MODEL,
+        model=config.GROQ_VISION_MODEL,
         messages=[{
             "role": "user",
             "content": [
-                {"type": "text", "text": prompt},
+                {"type": "text", "text": PROMPT},
                 {"type": "image_url", "image_url": {"url": f"data:{file.type};base64,{encoded}"}}
-            ]
-        }]
+            ],
+        }],
         temperature=0.2,
-        max_completion_tokens=1200
+        max_completion_tokens=1200,
         response_format={"type": "json_object"},
     )
+    return json.loads(response.choices[0].message.content)
 
-    return json_loads(response.choices[0].message.content)
+
+def px(box, w, h):
+    values = [box["x"], box["y"], box["x"] + box["w"], box["y"] + box["h"]]
+    return tuple(max(0, min(int(v * s / 100), s - 1)) for v, s in zip(values, (w, h, w, h)))
+
 
 def prepare_objects(items):
-    seen, objects = set(), []
+    seen, output = set(), []
     for item in items:
         name = item.get("name", "").strip().lower()
         label = item.get("short_label", "").strip().lower()
-        confidence = item.get("confidence", "").strip().lower()
+        confidence = item.get("confidence", "low").strip().lower()
 
-        if not name or confidence not in ["high", "medium"]:
+        if not name or confidence not in {"high", "medium"}:
             continue
 
         if any(word in name or word in label for word in PERSON_WORDS):
@@ -63,41 +77,37 @@ def prepare_objects(items):
             if label not in SAFE_LABELS:
                 item["short_label"] = "person"
 
-        key=(item["name"].strip().lower(), item.get("short_label", "").strip().lower())
-
+        key = (item["name"].strip().lower(), item.get("short_label", "").strip().lower())
         if key not in seen:
             seen.add(key)
-            objects.append(item)
+            output.append(item)
 
-        return output
+    return output
+
 
 def groups(items, size):
-    return [items[i:i + size] for i in range(0, len(items), size)]                
-
-def px(box, w, h):
-    values=[box["x"], box["y"], box["x"] +  box["w"], box["y"] + box["h"]]
-    return tuple(max(0, min(int(v * s / 100), s-1)) for v, s in zip(values, (w, h, w, h)))
+    return [items[i:i + size] for i in range(0, len(items), size)]
 
 def fonts():
     try:
-        return[ImageFont.truetype("arial.ttf", size) for size in (28, 18, 14)]
+        return [ImageFont.truetype("arial.ttf", size) for size in (28, 18, 14)]
     except Exception:
-        return [ImageFont.load_default()]*20
+        return [ImageFont.load_default()] * 3
 
-def hud(img, page, scenes, object, total):
+def hud(img, scene, objects, page, total):
     img = img.convert("RGBA")
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     (w, h), (title_font, label_font, small_font) = img.size, fonts()
 
-    green=(57, 255, 20, 255)
-    panel=(0, 20, 10, 185)
-    red=(255, 60, 60, 255)
+    green = (57, 255, 20, 255)
+    panel = (0, 20, 10, 185)
+    red = (255, 60, 60, 255)
 
-    draw.rectangle((20, 20, w-20, 70), fill=panel)
-    draw.text((35, 32), f"[ {scene.upper()} [{page}/{scenes}] ]", font=title_font, fill=green)
-    draw.ellipse((w-120, 28, w-104, 44), fill=green)
-    draw.text((w-96, 26), "REC", fill=green, font=label_font)
+    draw.rectangle((20, 20, w - 20, 70), fill=panel)
+    draw.text((35, 32), f"[ {scene.upper()} [{page}/{total}] ]", fill=green, font=title_font)
+    draw.ellipse((w - 120, 28, w - 104, 44), fill=red)
+    draw.text((w - 96, 26), "REC", fill=green, font=label_font)
 
     for obj in objects:
         box = obj.get("box", {})
@@ -107,83 +117,88 @@ def hud(img, page, scenes, object, total):
         x1, y1, x2, y2 = px(box, w, h)
         draw.rectangle((x1, y1, x2, y2), outline=green, width=2)
 
-        for a,b,c,d in [
-            (x1, y1, x1 + 18, y1), (x1, y1, x1, y1 + 18)
-            (x2, y1, x2 - 18, y1), (x2, y1, x2, y1 + 18)
-            (x1, y2, x1 + 18, y2), (x1, y2, x1, y2 - 18)
-            (x2, y2, x2 - 18, y2), (x2, y2, x2, y2 - 18)
+        for a, b, c, d in [
+            (x1, y1, x1 + 18, y1), (x1, y1, x1, y1 + 18),
+            (x2, y1, x2 - 18, y1), (x2, y1, x2, y1 + 18),
+            (x1, y2, x1 + 18, y2), (x1, y2, x1, y2 - 18),
+            (x2, y2, x2 - 18, y2), (x2, y2, x2, y2 - 18),
         ]:
             draw.line((a, b, c, d), fill=green, width=3)
-        
+
         label = obj.get("short_label", obj.get("name", "UNKNOWN")).upper()
-        metadata = obj.get("fun_metadata", "NO DATA")
-        conf = obj.get("confidence", "UNKNOWN").upper()
+        meta = obj.get("fun_metadata", "NO DATA")
+        conf = obj.get("confidence", "low").upper()
         panel_y = max(80, y1 - 55)
 
         if panel_y < 80:
-
             panel_y = min(h - 80, y2 + 10)
-            panel_x1 = x1
-            panel_x2 = min(w - 20, x1 + 320)
-            panel_y2 = panel_y + 45
-            draw.rectangle((panel_x1, panel_y, panel_x2, panel_y2), fill=panel, outline=green, width=2)
-            draw.text((panel_x1 + 8, panel_y + 6), f"[ITEM] {label}", fill=green, font=label_font)
-            draw.text((panel_x1 + 8, panel_y + 25), f"{meta} | CONF: {conf}", fill=green, font=small_font)
-            draw.line(
+
+        panel_x1 = x1
+        panel_x2 = min(w - 20, x1 + 320)
+        panel_y2 = panel_y + 45
+
+        draw.rectangle((panel_x1, panel_y, panel_x2, panel_y2), fill=panel, outline=green, width=2)
+        draw.text((panel_x1 + 8, panel_y + 6), f"[ITEM] {label}", fill=green, font=label_font)
+        draw.text((panel_x1 + 8, panel_y + 25), f"{meta} | CONF: {conf}", fill=green, font=small_font)
+
+        draw.line(
             (panel_x1 + 20, panel_y2 if panel_y < y1 else panel_y, x1 + 10, y1 + 10 if panel_y < y1 else y2 - 10),
             fill=green,
             width=2,
-            )
+        )
 
-            draw.rectangle((20, h - 55, w - 20, h - 20), fill=panel)
-
-draw.text(
-    (30, h - 45),
-    f"OBJECTS IN THIS SCAN: {len(objects)} | SCAN MODE: ACTIVE",
-    fill=green,
-    font=label_font,
+    draw.rectangle((20, h - 55, w - 20, h - 20), fill=panel)
+    draw.text(
+        (30, h - 45),
+        f"OBJECTS IN THIS SCAN: {len(objects)}    |    SCAN MODE: ACTIVE",
+        fill=green,
+        font=label_font,
     )
+
     return Image.alpha_composite(img, overlay).convert("RGB")
 
-def image_bytes(img):
+
+def img_bytes(img):
     buffer = io.BytesIO()
-    img.save(buffer, format="JPEG")
+    img.save(buffer, format="PNG")
     return buffer.getvalue()
 
-file = st.file_uploader("Upload an image for analysis", type=["jpg", "jpeg", "png", "webp"])
-group_size = st.selectbox("Objects per scanner image", [3,4], index=1)
+file = st.file_uploader("Upload a photo", type=["png", "jpg", "jpeg", "webp"])
+group_size = st.selectbox("Objects per scanner image", [3, 4], index=1)
 if file:
     original = Image.open(BytesIO(file.getvalue()))
     st.image(original, caption="Original Image", use_container_width=True)
-
-if st.button("Analyze Image"):
+if st.button("🛰️ Scan Image"):
     if not config.GROQ_API_KEY:
-        st.error("Missing Groq API key. Please set the GROQ_API_KEY .env variable.")
+        st.error("Groq API key is missing. Please add it to your .env file.")
     elif not file:
-        st.error("Please upload an image before analyzing.")
+        st.warning("Please upload an image first.")
     else:
-        with st.spinner("Analyzing image..."):
+        with st.spinner("Scanning your image..."):
             try:
                 data = analyze_image(file)
                 scene = data.get("scene_title", "AI SCAN MODE")
                 object_groups = groups(prepare_objects(data.get("objects", [])), group_size)
-                Image = image.open(BytesIO(file.getvalue()))
+                image = Image.open(BytesIO(file.getvalue()))
                 st.session_state.xray_outputs = [
-                    hud(Image, scene, group, i, len(object_groups))
+                    hud(image, scene, group, i, len(object_groups))
                     for i, group in enumerate(object_groups, 1)
                 ]
-                st.success(f"Image analysis complete! {len(st.session_state.xray_outputs)} scanner image(s) generated.")
-            except Exception as e:
-                st.error(f"Error analyzing image: {e}")
+                st.success(f"Scan complete! Created {len(st.session_state.xray_outputs)} scanner image(s).")
+            except Exception as error:
+                st.error(f"Something went wrong: {error}")
 
-    if st.session_state.xray_outputs:
-        st.markdown("### Scanner Images")
-        for i, output in enumerate(st.session_state.xray_outputs, 1):
-            st.image(output, caption=f"Scanner Image {i}", use_container_width=True)
 
-    st.download_button(
-        f"label = Download All Scanner Images {i}",
-        image(bytes_output)
-        f="ai_scanner_image_{i}.png", "image/png",
-        key=f"download_scanner_image_{i}"
-    )
+if st.session_state.xray_outputs:
+    st.markdown("## Scanner Results")
+    for i, output in enumerate(st.session_state.xray_outputs, 1):
+        st.image(output, caption=f"Scanner Image {i}", use_container_width=True)
+
+
+        st.download_button(
+            f"📥 Download Scanner Image {i}",
+            img_bytes(output),
+            f"ai_xray_vision_{i}.png",
+            "image/png",
+            key=f"download_{i}",
+        )
